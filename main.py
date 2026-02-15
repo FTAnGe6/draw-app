@@ -69,6 +69,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
             data = await websocket.receive_json()
             action = data.get("action")
             
+            if action == "ping":
+                continue  # 收到心跳，什么都不做，直接进入下一次循环
+            
             # --- 动作：开始发牌 ---
             if action == "start":
                 if websocket != room["host_ws"]:
@@ -127,4 +130,5 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
             
             # 广播最新房间状态
             await broadcast_update()
+
 
