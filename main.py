@@ -5,111 +5,125 @@ import os
 
 app = FastAPI()
 
-# 存放所有的房间数据。键是房间号，值是房间信息的字典。
 rooms = {}
+ROLES = ["刺客", "法师", "射手", "辅助", "战士"]
 
-# 待分配的五个角色
-ROLES = ["主公", "忠臣1", "忠臣2", "反贼1", "反贼2"]
-
-# 读取前端页面
 @app.get("/")
 async def get():
     html_path = os.path.join(os.path.dirname(__file__), "index.html")
     with open(html_path, "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
-# WebSocket 核心逻辑
+# 注意这里增加了 client_id 参数，用来接收玩家输入的昵称
 @app.websocket("/ws/{room_id}")
-async def websocket_endpoint(websocket: WebSocket, room_id: str):
+async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str):
     await websocket.accept()
 
-    # 如果房间不存在，就初始化一个
     if room_id not in rooms:
         rooms[room_id] = {
-            "connections": [], # 存放玩家的 ws 对象和代号
-            "host_ws": websocket, # 第一个进来的设为房主
-            "counter": 1 # 用于生成玩家代号
+            "connections": [],
+            "host_ws": websocket 
         }
     
     room = rooms[room_id]
 
-    # 限制5个人
+    # 1. 检查人数
     if len(room["connections"]) >= 5:
         await websocket.send_json({"type": "error", "msg": "房间已满，最多5人"})
         await websocket.close()
         return
 
-    # 分配玩家代号
-    player_id = f"玩家{room['counter']}"
-    room["counter"] += 1
-    
-    # 将当前用户加入房间记录
-    player_info = {"ws": websocket, "player_id": player_id}
+    # 2. 检查昵称是否重复
+    for c in room["connections"]:
+        if c["player_id"] == client_id:
+            await websocket.send_json({"type": "error", "msg": f"昵称 '{client_id}' 已被占用，请换一个"})
+            await websocket.close()
+            return
+
+    # 加入房间
+    player_info = {"ws": websocket, "player_id": client_id}
     room["connections"].append(player_info)
 
-    # 告诉该用户：欢迎加入，你是不是房主
     is_host = (websocket == room["host_ws"])
     await websocket.send_json({
         "type": "welcome",
-        "player_id": player_id,
+        "player_id": client_id,
         "is_host": is_host
     })
 
-    # 广播给所有人：人数有更新了！
+    # 广播更新函数
     async def broadcast_update():
+        if room_id not in rooms: return
         players_list = [c["player_id"] for c in room["connections"]]
         host_id = [c["player_id"] for c in room["connections"] if c["ws"] == room["host_ws"]][0] if room["host_ws"] else ""
         for c in room["connections"]:
-            await c["ws"].send_json({
-                "type": "update",
-                "players": players_list,
-                "host": host_id
-            })
+            try:
+                await c["ws"].send_json({"type": "update", "players": players_list, "host": host_id})
+            except:
+                pass
 
     await broadcast_update()
 
     try:
-        # 持续监听当前用户发来的消息
         while True:
             data = await websocket.receive_json()
+            action = data.get("action")
             
-            # 只有收到房主发来的 "start" 指令，才开始发牌
-            if data.get("action") == "start":
+            # --- 动作：开始发牌 ---
+            if action == "start":
                 if websocket != room["host_ws"]:
                     await websocket.send_json({"type": "error", "msg": "只有房主才能发牌哦"})
                     continue
                 
                 num_players = len(room["connections"])
-                
-                # --- [测试友好提示] ---
-                # 为了方便你一个人打开几个浏览器窗口测试，这里目前允许不满 5 人也发牌（会截取前几个角色）。
-                # 如果你想严格限制必须 5 个人才能开始，取消下面两行代码的注释即可：
-                # if num_players != 5:
-                #     await websocket.send_json({"type": "error", "msg": f"当前只有 {num_players} 人，必须凑齐 5 人才能发牌！"})
-                #     continue
-                
-                # 核心发牌逻辑：打乱角色列表
                 shuffled_roles = ROLES[:num_players]
                 random.shuffle(shuffled_roles)
 
-                # 将打乱后的角色，一对一盲发给对应的玩家
                 for i, c in enumerate(room["connections"]):
                     await c["ws"].send_json({
                         "type": "result",
                         "role": shuffled_roles[i]
                     })
+            
+            # --- 动作：解散房间 ---
+            elif action == "destroy":
+                if websocket != room["host_ws"]:
+                    await websocket.send_json({"type": "error", "msg": "只有房主才能解散房间"})
+                    continue
+                
+                # 通知所有人房间已解散
+                for c in room["connections"]:
+                    if c["ws"] != websocket: # 房主自己由前端直接跳转，不用发
+                        await c["ws"].send_json({"type": "destroyed"})
+                    await c["ws"].close()
+                
+                del rooms[room_id]
+                return # 结束当前连接
+                
+            # --- 动作：退出房间 ---
+            elif action == "leave":
+                break # 直接跳出循环，触发下方的 disconnect 逻辑
 
     except WebSocketDisconnect:
-        # 玩家断开连接（如关掉网页）
+        pass
+
+    # --- 玩家断开连接后的清理逻辑（断网、点退出、关网页都会触发） ---
+    if room_id in rooms:
+        # 将该玩家从列表中移除
         room["connections"] = [c for c in room["connections"] if c["ws"] != websocket]
         
         if not room["connections"]:
-            # 如果人都走光了，销毁房间释放内存
+            # 人走空了，销毁房间
             del rooms[room_id]
         else:
-            # 如果房主走了，把房主移交给下一个还在房间里的人
+            # 如果退出的是房主，移交房主权限给第一个加入的人
             if websocket == room["host_ws"]:
                 room["host_ws"] = room["connections"][0]["ws"]
-            # 广播最新状态
-
+                try:
+                    # 告诉新房主，你上位了
+                    await room["host_ws"].send_json({"type": "become_host"})
+                except:
+                    pass
+            
+            # 广播最新房间状态
             await broadcast_update()
