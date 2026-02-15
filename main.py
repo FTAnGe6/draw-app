@@ -6,7 +6,7 @@ import os
 app = FastAPI()
 
 rooms = {}
-ROLES = ["刺客", "法师", "射手", "辅助", "战士"]
+ROLES = ["主公", "忠臣1", "忠臣2", "反贼1", "反贼2"]
 
 @app.get("/")
 async def get():
@@ -127,3 +127,4 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, client_id: str)
             
             # 广播最新房间状态
             await broadcast_update()
+
