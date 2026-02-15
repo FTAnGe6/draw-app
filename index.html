@@ -3,17 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>盲发抽签应用</title>
+    <title>盲发抽签应用 - 升级版</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; color: #333; }
         .container { background: white; max-width: 400px; margin: 0 auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        input { padding: 10px; font-size: 16px; width: 80%; margin-bottom: 20px; border: 1px solid #ccc; border-radius: 6px; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 6px; transition: 0.3s; }
+        input { padding: 10px; font-size: 16px; width: 80%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 6px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 6px; transition: 0.3s; margin: 5px; }
         button:hover { background-color: #0056b3; }
-        .hidden { display: none; }
+        .hidden { display: none !important; }
         #my-role { font-size: 40px; font-weight: bold; color: #d9534f; margin: 20px 0; }
-        #start-btn { background-color: #28a745; margin-top: 20px; }
-        #start-btn:hover { background-color: #218838; }
+        
+        /* 按钮特定颜色 */
+        .btn-success { background-color: #28a745; }
+        .btn-success:hover { background-color: #218838; }
+        .btn-danger { background-color: #dc3545; }
+        .btn-danger:hover { background-color: #c82333; }
+        .btn-warning { background-color: #ffc107; color: black; }
+        .btn-warning:hover { background-color: #e0a800; }
+        
+        .action-buttons { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
     </style>
 </head>
 <body>
@@ -22,37 +30,47 @@
     <div id="login-screen">
         <h2>⚔️ 组队抽签</h2>
         <input type="text" id="room-id" placeholder="输入房间号 (如 888)" autocomplete="off">
+        <input type="text" id="player-name" placeholder="输入你的昵称" autocomplete="off" maxlength="10">
         <br>
         <button onclick="joinRoom()">进入房间</button>
     </div>
 
     <div id="room-screen" class="hidden">
-        <h2>房间号: <span id="display-room"></span></h2>
-        <p>你的身份: <strong id="my-id"></strong> <span id="host-badge" style="color:red; display:none;">(房主)</span></p>
+        <h2>房间: <span id="display-room"></span></h2>
+        <p>你的身份: <strong id="my-id"></strong> <span id="host-badge" style="color:red; display:none;">(👑 房主)</span></p>
         <hr>
         <p id="host-info"></p>
         <p id="player-list"></p>
-        <button id="start-btn" class="hidden" onclick="startDraw()">发牌！</button>
+        
         <p id="waiting-text" class="hidden" style="color: #666;">等待房主发牌...</p>
+        
+        <div class="action-buttons">
+            <button id="start-btn" class="btn-success hidden" onclick="sendAction('start')">开始发牌！</button>
+            <button id="destroy-btn" class="btn-danger hidden" onclick="sendAction('destroy')">解散房间</button>
+            <button id="leave-btn" class="btn-warning" onclick="sendAction('leave')">退出房间</button>
+        </div>
     </div>
 
     <div id="result-screen" class="hidden">
         <h2>你的角色是</h2>
         <div id="my-role"></div>
         <p style="color: #666;">嘘，只有你能看到！</p>
+        <button class="btn-warning" style="margin-top:20px" onclick="backToHome()">返回首页</button>
     </div>
 </div>
 
 <script>
-    let ws;
+    let ws = null;
 
     function joinRoom() {
         const roomId = document.getElementById('room-id').value.trim();
-        if (!roomId) return alert("请输入房间号！");
+        const playerName = document.getElementById('player-name').value.trim();
+        
+        if (!roomId || !playerName) return alert("房间号和昵称都不能为空！");
 
-        // 自动识别当前的域名并建立 WebSocket 连接
+        // 将昵称通过 URL 参数传给后端
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${protocol}//${window.location.host}/ws/${roomId}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/${roomId}?client_id=${encodeURIComponent(playerName)}`;
         
         ws = new WebSocket(wsUrl);
 
@@ -60,33 +78,34 @@
             const data = JSON.parse(event.data);
 
             if (data.type === "welcome") {
-                // 进入房间成功，切换 UI
                 document.getElementById('login-screen').classList.add('hidden');
                 document.getElementById('room-screen').classList.remove('hidden');
                 document.getElementById('display-room').innerText = roomId;
                 document.getElementById('my-id').innerText = data.player_id;
-
-                if (data.is_host) {
-                    document.getElementById('host-badge').style.display = "inline";
-                    document.getElementById('start-btn').classList.remove('hidden');
-                } else {
-                    document.getElementById('waiting-text').classList.remove('hidden');
-                }
+                
+                updateHostUI(data.is_host);
             } 
             else if (data.type === "update") {
-                // 更新房间人数状态
                 document.getElementById('host-info').innerText = "👑 房主: " + data.host;
-                document.getElementById('player-list').innerText = `👥 当前玩家 (${data.players.length}/5): ` + data.players.join(", ");
+                document.getElementById('player-list').innerText = `👥 玩家 (${data.players.length}/5): ` + data.players.join(", ");
             } 
             else if (data.type === "result") {
-                // 收到角色，切换到结果页面
                 document.getElementById('room-screen').classList.add('hidden');
                 document.getElementById('result-screen').classList.remove('hidden');
                 document.getElementById('my-role').innerText = data.role;
             } 
+            else if (data.type === "become_host") {
+                // 如果老房主退出了，后端通知你成为了新房主
+                alert("原房主已退出，你成为了新房主！");
+                updateHostUI(true);
+            }
+            else if (data.type === "destroyed") {
+                alert("房主解散了房间！");
+                backToHome();
+            }
             else if (data.type === "error") {
                 alert(data.msg);
-                if (data.msg === "房间已满，最多5人") {
+                if (data.msg.includes("已满") || data.msg.includes("被占用")) {
                     ws.close();
                 }
             }
@@ -97,9 +116,38 @@
         };
     }
 
-    function startDraw() {
-        // 告诉后端，房主按下了开始
-        ws.send(JSON.stringify({action: "start"}));
+    function sendAction(actionType) {
+        if(ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({action: actionType}));
+            if(actionType === 'leave') {
+                backToHome();
+            }
+        }
+    }
+
+    function updateHostUI(isHost) {
+        if (isHost) {
+            document.getElementById('host-badge').style.display = "inline";
+            document.getElementById('start-btn').classList.remove('hidden');
+            document.getElementById('destroy-btn').classList.remove('hidden');
+            document.getElementById('waiting-text').classList.add('hidden');
+        } else {
+            document.getElementById('host-badge').style.display = "none";
+            document.getElementById('start-btn').classList.add('hidden');
+            document.getElementById('destroy-btn').classList.add('hidden');
+            document.getElementById('waiting-text').classList.remove('hidden');
+        }
+    }
+
+    function backToHome() {
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+        // 重置界面
+        document.getElementById('login-screen').classList.remove('hidden');
+        document.getElementById('room-screen').classList.add('hidden');
+        document.getElementById('result-screen').classList.add('hidden');
     }
 </script>
 
