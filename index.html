@@ -61,6 +61,7 @@
 
 <script>
     let ws = null;
+    let heartbeatInterval = null; // 【新增】用来存放定时器
 
     function joinRoom() {
         const roomId = document.getElementById('room-id').value.trim();
@@ -68,13 +69,24 @@
         
         if (!roomId || !playerName) return alert("房间号和昵称都不能为空！");
 
-        // 将昵称通过 URL 参数传给后端
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${window.location.host}/ws/${roomId}?client_id=${encodeURIComponent(playerName)}`;
         
         ws = new WebSocket(wsUrl);
 
+        // 【新增】连接打开后，立刻启动心跳
+        ws.onopen = function() {
+            console.log("连接成功，启动心跳");
+            // 每 30 秒（30000毫秒）给服务器发一条毫无意义的 "ping" 消息，用来续命
+            heartbeatInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({action: "ping"}));
+                }
+            }, 30000);
+        };
+
         ws.onmessage = function(event) {
+            // ...(这部分和原来一样，保持不变)...
             const data = JSON.parse(event.data);
 
             if (data.type === "welcome") {
@@ -95,7 +107,6 @@
                 document.getElementById('my-role').innerText = data.role;
             } 
             else if (data.type === "become_host") {
-                // 如果老房主退出了，后端通知你成为了新房主
                 alert("原房主已退出，你成为了新房主！");
                 updateHostUI(true);
             }
@@ -106,13 +117,18 @@
             else if (data.type === "error") {
                 alert(data.msg);
                 if (data.msg.includes("已满") || data.msg.includes("被占用")) {
-                    ws.close();
+                    backToHome(); // 出错退回首页
                 }
             }
         };
 
         ws.onclose = function() {
             console.log("连接已断开");
+            // 【新增】断开连接时，停止心跳定时器
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
         };
     }
 
@@ -140,16 +156,22 @@
     }
 
     function backToHome() {
-        if (ws) {
-            ws.close();
-            ws = null;
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            // 【新增】用户主动退出时，也要停掉心跳定时器
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+            // 重置界面
+            document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('room-screen').classList.add('hidden');
+            document.getElementById('result-screen').classList.add('hidden');
         }
-        // 重置界面
-        document.getElementById('login-screen').classList.remove('hidden');
-        document.getElementById('room-screen').classList.add('hidden');
-        document.getElementById('result-screen').classList.add('hidden');
-    }
 </script>
 
 </body>
 </html>
+
