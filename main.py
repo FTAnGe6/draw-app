@@ -9,7 +9,7 @@ app = FastAPI()
 rooms = {}
 
 # 待分配的五个角色
-ROLES = ["刺客", "法师", "射手", "辅助", "战士"]
+ROLES = ["主公", "忠臣1", "忠臣2", "反贼1", "反贼2"]
 
 # 读取前端页面
 @app.get("/")
@@ -111,4 +111,5 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if websocket == room["host_ws"]:
                 room["host_ws"] = room["connections"][0]["ws"]
             # 广播最新状态
+
             await broadcast_update()
