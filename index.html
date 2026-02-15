@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>盲发抽签应用</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; color: #333; }
+        .container { background: white; max-width: 400px; margin: 0 auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        input { padding: 10px; font-size: 16px; width: 80%; margin-bottom: 20px; border: 1px solid #ccc; border-radius: 6px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 6px; transition: 0.3s; }
+        button:hover { background-color: #0056b3; }
+        .hidden { display: none; }
+        #my-role { font-size: 40px; font-weight: bold; color: #d9534f; margin: 20px 0; }
+        #start-btn { background-color: #28a745; margin-top: 20px; }
+        #start-btn:hover { background-color: #218838; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="login-screen">
+        <h2>⚔️ 组队抽签</h2>
+        <input type="text" id="room-id" placeholder="输入房间号 (如 888)" autocomplete="off">
+        <br>
+        <button onclick="joinRoom()">进入房间</button>
+    </div>
+
+    <div id="room-screen" class="hidden">
+        <h2>房间号: <span id="display-room"></span></h2>
+        <p>你的身份: <strong id="my-id"></strong> <span id="host-badge" style="color:red; display:none;">(房主)</span></p>
+        <hr>
+        <p id="host-info"></p>
+        <p id="player-list"></p>
+        <button id="start-btn" class="hidden" onclick="startDraw()">发牌！</button>
+        <p id="waiting-text" class="hidden" style="color: #666;">等待房主发牌...</p>
+    </div>
+
+    <div id="result-screen" class="hidden">
+        <h2>你的角色是</h2>
+        <div id="my-role"></div>
+        <p style="color: #666;">嘘，只有你能看到！</p>
+    </div>
+</div>
+
+<script>
+    let ws;
+
+    function joinRoom() {
+        const roomId = document.getElementById('room-id').value.trim();
+        if (!roomId) return alert("请输入房间号！");
+
+        // 自动识别当前的域名并建立 WebSocket 连接
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}/ws/${roomId}`;
+        
+        ws = new WebSocket(wsUrl);
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+
+            if (data.type === "welcome") {
+                // 进入房间成功，切换 UI
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('room-screen').classList.remove('hidden');
+                document.getElementById('display-room').innerText = roomId;
+                document.getElementById('my-id').innerText = data.player_id;
+
+                if (data.is_host) {
+                    document.getElementById('host-badge').style.display = "inline";
+                    document.getElementById('start-btn').classList.remove('hidden');
+                } else {
+                    document.getElementById('waiting-text').classList.remove('hidden');
+                }
+            } 
+            else if (data.type === "update") {
+                // 更新房间人数状态
+                document.getElementById('host-info').innerText = "👑 房主: " + data.host;
+                document.getElementById('player-list').innerText = `👥 当前玩家 (${data.players.length}/5): ` + data.players.join(", ");
+            } 
+            else if (data.type === "result") {
+                // 收到角色，切换到结果页面
+                document.getElementById('room-screen').classList.add('hidden');
+                document.getElementById('result-screen').classList.remove('hidden');
+                document.getElementById('my-role').innerText = data.role;
+            } 
+            else if (data.type === "error") {
+                alert(data.msg);
+                if (data.msg === "房间已满，最多5人") {
+                    ws.close();
+                }
+            }
+        };
+
+        ws.onclose = function() {
+            console.log("连接已断开");
+        };
+    }
+
+    function startDraw() {
+        // 告诉后端，房主按下了开始
+        ws.send(JSON.stringify({action: "start"}));
+    }
+</script>
+
+</body>
+</html>
